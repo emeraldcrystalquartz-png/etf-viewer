@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0a0e17">
+<title>ETF Viewer</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Syne:wght@700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#0a0e17;color:#e2e8f0;font-family:'Syne',sans-serif;-webkit-text-size-adjust:100%}
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-track{background:#111827}
+::-webkit-scrollbar-thumb{background:#1f2d40;border-radius:2px}
+input,button{-webkit-appearance:none;appearance:none}
+input:focus{outline:none}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.fade-in{animation:fadeIn .25s ease forwards}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useCallback,useMemo,useRef} = React;
+const C={bg:"#0a0e17",surface:"#111827",surface2:"#1a2535",border:"#1f2d40",
+  accent:"#00d4aa",accent2:"#f59e0b",danger:"#ef4444",text:"#e2e8f0",
+  muted:"#94a3b8",purple:"#a855f7",blue:"#60a5fa"};
+
+/* ── CSVパーサー（#コメント行・複数セクション対応）── */
+function parseCSVLine(line){
+  const vals=[];let cur="",inQ=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(ch==='"'){inQ=!inQ;continue}
+    if(ch===','&&!inQ){vals.push(cur.trim());cur="";continue}
+    cur+=ch;
+  }
+  vals.push(cur.trim());return vals;
+}
+function parseMultiSectionCSV(text){
+  const lines=text.split(/\r?\n/);
+  const sections=[];let cur=null;
+  for(const line of lines){
+    if(!line.trim()) continue;
+    if(line.startsWith("#")){
+      const title=line.replace(/^#\s*/,"").split(",")[0].trim();
+      cur={title,headers:null,rows:[]};sections.push(cur);continue;
+    }
+    if(!cur){cur={title:"データ",headers:null,rows:[]};sections.push(cur);}
+    if(!cur.headers){cur.headers=parseCSVLine(line);continue;}
+    const vals=parseCSVLine(line);
+    if(!vals.length||vals.every(v=>!v)) continue;
+    const obj={};cur.headers.forEach((h,i)=>{obj[h]=vals[i]??""});
+    cur.rows.push(obj);
+  }
+  return sections.filter(s=>s.headers&&s.rows.length>0);
+}
+function isNumericCol(rows,col){
+  const s=rows.slice(0,20).map(r=>r[col]).filter(v=>v);
+  if(!s.length) return false;
+  return s.filter(v=>!isNaN(parseFloat(v.toString().replace(/[%,]/g,"")))).length/s.length>0.7;
+}
+
+/* ── シグナルバッジ ── */
+const SIG_STYLES={
+  "52週高値": {bg:"rgba(255,215,0,.18)",color:"#ffd700",border:"rgba(255,215,0,.5)"},
+  "200日MA":  {bg:"rgba(0,212,170,.15)",color:"#00d4aa",border:"rgba(0,212,170,.4)"},
+  "出来高":   {bg:"rgba(245,158,11,.15)",color:"#f59e0b",border:"rgba(245,158,11,.4)"},
+  "MACD":     {bg:"rgba(96,165,250,.15)",color:"#60a5fa",border:"rgba(96,165,250,.4)"},
+  "RSI":      {bg:"rgba(168,85,247,.15)",color:"#a855f7",border:"rgba(168,85,247,.4)"},
+  "ボリン":   {bg:"rgba(0,212,170,.12)",color:"#00d4aa",border:"rgba(0,212,170,.35)"},
+  "MA":       {bg:"rgba(96,165,250,.12)",color:"#60a5fa",border:"rgba(96,165,250,.35)"},
+  "default":  {bg:"rgba(148,163,184,.1)",color:"#94a3b8",border:"rgba(148,163,184,.3)"},
+};
+function getSigStyle(sig){
+  for(const[k,v] of Object.entries(SIG_STYLES)){
+    if(k!=="default"&&sig.includes(k)) return v;
+  }
+  return SIG_STYLES.default;
+}
+function SignalBadges({value}){
+  if(!value) return <span style={{color:C.muted}}>—</span>;
+  const sigs=value.split("|").map(s=>s.trim()).filter(Boolean);
+  if(!sigs.length) return <span style={{color:C.muted}}>—</span>;
+  return(
+    <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+      {sigs.map((sig,i)=>{
+        const st=getSigStyle(sig);
+        return <span key={i} style={{background:st.bg,color:st.color,
+          border:`1px solid ${st.border}`,borderRadius:4,padding:"1px 6px",
+          fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.65rem",whiteSpace:"nowrap"}}>{sig}</span>;
+      })}
+    </div>
+  );
+}
+
+/* ── 感情ラベル ── */
+function EmotionBadge({value}){
+  if(!value) return <span style={{color:C.muted}}>—</span>;
+  const map={"恐怖":[C.danger,"rgba(239,68,68,"],"不安":[C.accent2,"rgba(245,158,11,"],
+    "中立":[C.muted,"rgba(148,163,184,"],"欲望":[C.accent,"rgba(0,212,170,"],"狂乱":[C.purple,"rgba(168,85,247,"]};
+  const m=Object.entries(map).find(([k])=>value.includes(k));
+  const [color,base]=m?m[1]:[C.muted,"rgba(148,163,184,"];
+  return <span style={{background:`${base}.15)`,color,border:`1px solid ${base}.4)`,
+    borderRadius:4,padding:"2px 8px",fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.72rem"}}>{value}</span>;
+}
+
+/* ── 数値フォーマット ── */
+function fmtNum(str, col){
+  const raw = parseFloat(str.replace(/[%,]/g,""));
+  if(isNaN(raw)) return str;
+  const hasPct = str.endsWith("%");
+  const cl = col.toLowerCase();
+  // 整数っぽい列（PER・シグナル数等）
+  const isInt = ["per","drawdown","dd"].some(k=>cl.includes(k)) && Number.isInteger(raw);
+  // 小数1桁で十分な列（RSI・ADX・スコア等）
+  const is1dp = ["rsi","adx","score","スコア","感情"].some(k=>cl.includes(k));
+  const digits = isInt ? 0 : is1dp ? 1 : 2;
+  const formatted = raw.toFixed(digits);
+  return hasPct ? formatted+"%" : formatted;
+}
+
+/* ── 汎用セル ── */
+function Cell({val,col}){
+  if(val===undefined||val===null||val==="") return <span style={{color:C.muted}}>—</span>;
+  const str=val.toString();
+  if(col.includes("シグナル")&&str.includes("|")) return <SignalBadges value={str}/>;
+  if(col.includes("感情ラベル")||col.includes("emotion_label")) return <EmotionBadge value={str}/>;
+  if(col.includes("シグナル数")){
+    const n=parseInt(str);
+    if(!isNaN(n)&&n>0){
+      const color=n>=4?C.purple:n>=2?C.accent2:C.muted;
+      return <span style={{fontFamily:"'IBM Plex Mono',monospace",fontWeight:600,fontSize:"0.9rem",color}}>{n}</span>;
+    }
+  }
+  const cl=col.toLowerCase();
+  const isChange=str.endsWith("%")||["前日比","リターン","乖離","スコア","dd","change","return","dev","score","rsi","adx","rp","per"].some(k=>cl.includes(k));
+  if(isChange){
+    const n=parseFloat(str.replace(/[%,]/g,""));
+    if(!isNaN(n)){
+      const color=n>0?C.accent:n<0?C.danger:C.muted;
+      const pre=n>0?"▲":n<0?"▼":"";
+      const disp=fmtNum(str,col);
+      return <span style={{color,fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.78rem",fontWeight:600}}>{pre} {disp}</span>;
+    }
+  }
+  // 数値っぽい値は桁数を丸める
+  const n=parseFloat(str);
+  if(!isNaN(n)&&str.trim()===String(n)){
+    const disp=fmtNum(str,col);
+    return <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.78rem"}}>{disp}</span>;
+  }
+  return <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.78rem"}}>{str}</span>;
+}
+
+/* ── セクションタブ ── */
+const ICONS={"スクリーナー":"📡","急騰":"🚨","押し目":"🎯","モメンタム":"📈","パニック":"😱","データ":"📋"};
+function SectionTabs({sections,active,onChange}){
+  return(
+    <div style={{display:"flex",gap:6,marginBottom:"0.85rem",overflowX:"auto",
+      WebkitOverflowScrolling:"touch",paddingBottom:2}}>
+      {sections.map((s,i)=>{
+        const icon=Object.entries(ICONS).find(([k])=>s.title.includes(k))?.[1]??"📋";
+        const on=active===i;
+        return(
+          <button key={i} onClick={()=>onChange(i)} style={{
+            background:on?C.accent:C.surface,color:on?C.bg:C.muted,
+            border:`1px solid ${on?C.accent:C.border}`,
+            borderRadius:7,padding:"0.4rem 0.75rem",
+            fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.7rem",
+            cursor:"pointer",whiteSpace:"nowrap",WebkitTapHighlightColor:"transparent",
+            fontWeight:on?600:400,
+          }}>{icon} {s.title}</button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── メインアプリ ── */
+function App(){
+  const [fileName,setFileName]=useState(null);
+  const [sections,setSections]=useState([]);
+  const [activeTab,setActiveTab]=useState(0);
+  const [sortCol,setSortCol]=useState(null);
+  const [sortAsc,setSortAsc]=useState(true);
+  const [filter,setFilter]=useState("");
+  const [numericCols,setNC]=useState({});
+  const fileRef=useRef();
+
+  const onFile=useCallback((name,text)=>{
+    const secs=parseMultiSectionCSV(text);
+    if(!secs.length){alert("データが見つかりませんでした");return;}
+    const nc={};
+    secs.forEach(s=>s.headers.forEach(h=>{nc[h]=isNumericCol(s.rows,h)}));
+    setFileName(name);setSections(secs);setActiveTab(0);
+    setNC(nc);setSortCol(null);setFilter("");
+  },[]);
+
+  const handleFile=useCallback(file=>{
+    if(!file||!file.name.toLowerCase().endsWith(".csv")) return;
+    const r=new FileReader();
+    r.onload=e=>onFile(file.name,e.target.result);
+    r.readAsText(file,"UTF-8");
+  },[onFile]);
+
+  const section=sections[activeTab];
+
+  const displayed=useMemo(()=>{
+    if(!section) return [];
+    let rows=section.rows;
+    if(filter.trim()){
+      const q=filter.toLowerCase();
+      rows=rows.filter(row=>Object.values(row).some(v=>v?.toString().toLowerCase().includes(q)));
+    }
+    if(sortCol){
+      rows=[...rows].sort((a,b)=>{
+        const va=a[sortCol]??"",vb=b[sortCol]??"";
+        if(numericCols[sortCol]){
+          const na=parseFloat(va.toString().replace(/[%,]/g,""))||0;
+          const nb=parseFloat(vb.toString().replace(/[%,]/g,""))||0;
+          return sortAsc?na-nb:nb-na;
+        }
+        return sortAsc?va.toString().localeCompare(vb.toString(),"ja")
+                      :vb.toString().localeCompare(va.toString(),"ja");
+      });
+    }
+    return rows;
+  },[section,filter,sortCol,sortAsc,numericCols]);
+
+  const toggleSort=col=>{
+    if(sortCol===col) setSortAsc(a=>!a);
+    else{setSortCol(col);setSortAsc(true);}
+  };
+  const reset=()=>{setFileName(null);setSections([]);setFilter("");setSortCol(null);};
+
+  const mono={fontFamily:"'IBM Plex Mono',monospace"};
+  const card={background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:".65rem .9rem",marginBottom:".75rem"};
+  const btn={background:"transparent",border:`1px solid ${C.border}`,color:C.muted,borderRadius:7,
+    padding:".5rem .8rem",cursor:"pointer",...mono,fontSize:".72rem",WebkitTapHighlightColor:"transparent"};
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,padding:".85rem .75rem",
+      paddingBottom:"max(1rem,env(safe-area-inset-bottom))"}}>
+
+      {/* ヘッダー */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+        borderBottom:`1px solid ${C.border}`,paddingBottom:".7rem",marginBottom:"1rem"}}>
+        <div>
+          <div style={{fontWeight:800,fontSize:"1.35rem",letterSpacing:"-.02em"}}>
+            ETF <span style={{color:C.accent}}>Viewer</span>
+          </div>
+          <div style={{...mono,fontSize:".62rem",color:C.muted,letterSpacing:".12em",textTransform:"uppercase"}}>
+            CSV Dashboard
+          </div>
+        </div>
+        {fileName
+          ?<button onClick={reset} style={btn}>✕ 閉じる</button>
+          :<button onClick={()=>fileRef.current.click()}
+              style={{...btn,borderColor:C.accent,color:C.accent}}>📂 開く</button>
+        }
+        <input ref={fileRef} type="file" accept=".csv" style={{display:"none"}}
+          onChange={e=>handleFile(e.target.files[0])}/>
+      </div>
+
+      {/* 未読み込み */}
+      {!fileName&&(
+        <div className="fade-in">
+          <div onClick={()=>fileRef.current.click()}
+            style={{border:`2px dashed ${C.border}`,borderRadius:14,
+              padding:"3rem 1rem",textAlign:"center",cursor:"pointer",
+              background:C.surface,marginBottom:"1.5rem",WebkitTapHighlightColor:"transparent"}}>
+            <div style={{fontSize:"3rem",marginBottom:".6rem"}}>📂</div>
+            <div style={{...mono,fontSize:".85rem",color:C.accent,letterSpacing:".1em",marginBottom:".35rem"}}>
+              CSVファイルを選択
+            </div>
+            <div style={{fontSize:".75rem",color:C.muted}}>タップして開く</div>
+          </div>
+          <div style={{...card,...mono,fontSize:".72rem",color:C.muted,lineHeight:2}}>
+            <div style={{color:C.accent,marginBottom:".3rem"}}>対応CSV（app.pyの全タブCSV）</div>
+            <div>📡 スクリーナー　🚨 急騰アラート</div>
+            <div>🎯 押し目　📈 モメンタム　😱 パニック売り</div>
+          </div>
+        </div>
+      )}
+
+      {/* データ表示 */}
+      {fileName&&section&&(
+        <div className="fade-in">
+          {/* ファイル名 */}
+          <div style={{...card,...mono,fontSize:".7rem",
+            display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span><span style={{color:C.muted}}>FILE: </span>
+              <span style={{color:C.accent}}>{fileName}</span></span>
+            <span style={{color:C.muted}}>
+              <span style={{color:C.text,fontWeight:600}}>{displayed.length}</span>/{section.rows.length}件
+            </span>
+          </div>
+
+          {/* セクションタブ */}
+          {sections.length>1&&
+            <SectionTabs sections={sections} active={activeTab}
+              onChange={i=>{setActiveTab(i);setSortCol(null);setFilter("");}}/>
+          }
+
+          {/* 検索 */}
+          <input value={filter} onChange={e=>setFilter(e.target.value)}
+            placeholder="🔍  検索（銘柄名・ティッカー等）"
+            style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+              borderRadius:8,padding:".6rem .85rem",color:C.text,...mono,
+              fontSize:".82rem",marginBottom:".75rem"}}/>
+
+          {/* ソート中 */}
+          {sortCol&&(
+            <div style={{...mono,fontSize:".68rem",color:C.muted,
+              marginBottom:".5rem",display:"flex",alignItems:"center",gap:".5rem"}}>
+              ↕ <span style={{color:C.accent}}>{sortCol}</span>で{sortAsc?"昇順":"降順"}
+              <button onClick={()=>setSortCol(null)}
+                style={{...btn,padding:"1px 8px",fontSize:".65rem"}}>解除</button>
+            </div>
+          )}
+
+          {/* テーブル */}
+          <div style={{overflowX:"auto",borderRadius:10,
+            border:`1px solid ${C.border}`,background:C.surface,
+            WebkitOverflowScrolling:"touch"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",
+              minWidth:section.headers.length*95}}>
+              <thead>
+                <tr style={{borderBottom:`2px solid ${C.border}`}}>
+                  {section.headers.map(col=>(
+                    <th key={col} style={{padding:".55rem .7rem",textAlign:"left",
+                      background:C.surface2,position:"sticky",top:0,zIndex:1}}>
+                      <button onClick={()=>toggleSort(col)} style={{
+                        background:"none",border:"none",cursor:"pointer",
+                        ...mono,fontSize:".68rem",letterSpacing:".04em",
+                        display:"flex",alignItems:"center",gap:3,padding:0,
+                        WebkitTapHighlightColor:"transparent",whiteSpace:"nowrap",
+                        color:sortCol===col?C.accent:C.muted,
+                      }}>
+                        {col}
+                        <span style={{fontSize:".6rem",color:C.border}}>
+                          {sortCol===col?(sortAsc?"▲":"▼"):"⇅"}
+                        </span>
+                      </button>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {displayed.length===0
+                  ?<tr><td colSpan={section.headers.length}
+                      style={{padding:"2.5rem",textAlign:"center",
+                        color:C.muted,...mono,fontSize:".78rem"}}>該当なし</td></tr>
+                  :displayed.map((row,i)=>(
+                    <tr key={i} style={{borderBottom:`1px solid ${C.border}`,
+                      background:i%2===0?"transparent":"rgba(255,255,255,.015)"}}>
+                      {section.headers.map(col=>(
+                        <td key={col} style={{padding:".5rem .7rem",
+                          verticalAlign:"middle",maxWidth:220}}>
+                          <Cell val={row[col]} col={col}/>
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{textAlign:"center",marginTop:".75rem",...mono,fontSize:".62rem",color:C.border}}>
+            {displayed.length} rows · {section.headers.length} cols
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
