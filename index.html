@@ -125,18 +125,18 @@ function fmtNum(str, col){
 
 /* ── RSI色分け ── */
 function rsiColor(n){
-  if(n < 30) return C.danger;           // 売られすぎ
-  if(n < 50) return C.accent2;          // やや弱め
-  if(n < 70) return C.accent;           // 通常
-  return C.purple;                       // 買われすぎ
+  if(n < 30) return C.blue;             // 売られすぎ（逆張り機会）
+  if(n < 50) return C.accent;           // やや弱め
+  if(n < 70) return C.accent2;          // 過熱気味
+  return C.danger;                       // 買われすぎ（警戒）
 }
 
 /* ── 200MA乖離率色分け ── */
 function maDevColor(n){
-  if(n < -10) return C.danger;          // 大幅下落
-  if(n < 0)   return C.accent2;         // やや弱
-  if(n < 15)  return C.accent;          // 通常上昇
-  return C.purple;                       // 過熱気味
+  if(n < -10) return C.blue;            // 大幅下落（逆張り機会）
+  if(n < 0)   return C.accent;          // やや弱め
+  if(n < 15)  return C.accent2;         // 過熱気味
+  return C.danger;                       // 大幅乖離（警戒）
 }
 
 /* ── ADX色分け ── */
@@ -149,11 +149,11 @@ function adxColor(n){
 
 /* ── 感情スコア色分け ── */
 function emotionScoreColor(n){
-  if(n < 30) return C.danger;           // 恐怖
-  if(n < 45) return C.accent2;          // 不安
+  if(n < 30) return C.blue;             // 恐怖（逆張り機会）
+  if(n < 45) return C.accent;           // 不安
   if(n < 55) return C.muted;            // 中立
-  if(n < 75) return C.accent;           // 欲望
-  return C.purple;                       // 狂乱
+  if(n < 75) return C.accent2;          // 欲望（過熱注意）
+  return C.danger;                       // 狂乱（警戒）
 }
 
 /* ── 汎用セル ── */
