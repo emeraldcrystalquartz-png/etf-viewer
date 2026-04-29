@@ -116,13 +116,44 @@ function fmtNum(str, col){
   if(isNaN(raw)) return str;
   const hasPct = str.endsWith("%");
   const cl = col.toLowerCase();
-  // 整数っぽい列（PER・シグナル数等）
   const isInt = ["per","drawdown","dd"].some(k=>cl.includes(k)) && Number.isInteger(raw);
-  // 小数1桁で十分な列（RSI・ADX・スコア等）
   const is1dp = ["rsi","adx","score","スコア","感情"].some(k=>cl.includes(k));
   const digits = isInt ? 0 : is1dp ? 1 : 2;
   const formatted = raw.toFixed(digits);
   return hasPct ? formatted+"%" : formatted;
+}
+
+/* ── RSI色分け ── */
+function rsiColor(n){
+  if(n < 30) return C.danger;           // 売られすぎ
+  if(n < 50) return C.accent2;          // やや弱め
+  if(n < 70) return C.accent;           // 通常
+  return C.purple;                       // 買われすぎ
+}
+
+/* ── 200MA乖離率色分け ── */
+function maDevColor(n){
+  if(n < -10) return C.danger;          // 大幅下落
+  if(n < 0)   return C.accent2;         // やや弱
+  if(n < 15)  return C.accent;          // 通常上昇
+  return C.purple;                       // 過熱気味
+}
+
+/* ── ADX色分け ── */
+function adxColor(n){
+  if(n < 20) return C.muted;            // トレンドなし
+  if(n < 25) return C.accent2;          // トレンド発生
+  if(n < 40) return C.accent;           // 中程度トレンド
+  return C.purple;                       // 強いトレンド
+}
+
+/* ── 感情スコア色分け ── */
+function emotionScoreColor(n){
+  if(n < 30) return C.danger;           // 恐怖
+  if(n < 45) return C.accent2;          // 不安
+  if(n < 55) return C.muted;            // 中立
+  if(n < 75) return C.accent;           // 欲望
+  return C.purple;                       // 狂乱
 }
 
 /* ── 汎用セル ── */
@@ -139,18 +170,43 @@ function Cell({val,col}){
     }
   }
   const cl=col.toLowerCase();
-  const isChange=str.endsWith("%")||["前日比","リターン","乖離","スコア","dd","change","return","dev","score","rsi","adx","rp","per"].some(k=>cl.includes(k));
-  if(isChange){
-    const n=parseFloat(str.replace(/[%,]/g,""));
+  const n=parseFloat(str.replace(/[%,]/g,""));
+
+  // RSI専用色分け
+  if(cl.includes("rsi")&&!isNaN(n)){
+    const color=rsiColor(n);
+    return <span style={{color,fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.78rem",fontWeight:600}}>{n.toFixed(1)}</span>;
+  }
+
+  // ADX専用色分け
+  if(cl.includes("adx")&&!isNaN(n)){
+    const color=adxColor(n);
+    return <span style={{color,fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.78rem",fontWeight:600}}>{n.toFixed(1)}</span>;
+  }
+
+  // 感情スコア専用色分け
+  if((col.includes("感情スコア")||col.includes("emotion_score"))&&!isNaN(n)){
+    const color=emotionScoreColor(n);
+    return <span style={{color,fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.78rem",fontWeight:600}}>{n.toFixed(1)}</span>;
+  }
+
+  // 200MA乖離率専用色分け
+  if((cl.includes("200")||cl.includes("乖離"))&&cl.includes("ma")||col.includes("200MA乖離")||col.includes("乖離率")){
     if(!isNaN(n)){
-      const color=n>0?C.accent:n<0?C.danger:C.muted;
-      const pre=n>0?"▲":n<0?"▼":"";
+      const color=maDevColor(n);
       const disp=fmtNum(str,col);
-      return <span style={{color,fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.78rem",fontWeight:600}}>{pre} {disp}</span>;
+      return <span style={{color,fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.78rem",fontWeight:600}}>{disp}</span>;
     }
   }
+
+  const isChange=str.endsWith("%")||["前日比","リターン","スコア","dd","change","return","dev","score","adx","rp","per"].some(k=>cl.includes(k));
+  if(isChange&&!isNaN(n)){
+    const color=n>0?C.accent:n<0?C.danger:C.muted;
+    const pre=n>0?"▲":n<0?"▼":"";
+    const disp=fmtNum(str,col);
+    return <span style={{color,fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.78rem",fontWeight:600}}>{pre} {disp}</span>;
+  }
   // 数値っぽい値は桁数を丸める
-  const n=parseFloat(str);
   if(!isNaN(n)&&str.trim()===String(n)){
     const disp=fmtNum(str,col);
     return <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:"0.78rem"}}>{disp}</span>;
